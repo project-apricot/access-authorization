@@ -1,0 +1,76 @@
+---
+title: Architecture
+description: How the pieces map onto attribute-based access control, and how to replace the decision point.
+---
+
+# Architecture
+
+## Against the reference model
+
+Measured against NIST SP 800-162 and XACML:
+
+| Reference component | Here |
+| --- | --- |
+| **PEP** — enforcement | The attributes, the authorization handlers, the imperative `Require` calls |
+| **PDP** — decision | `IAccessAuthorization`. The built-in implementation is a local, in-process one |
+| **Policies** | `IAccessRule` implementations — application code, not data |
+| **PIP** — attribute sources | `IAccessStore`, plus whatever a rule injects for itself |
+| **Combining algorithm** | Ordered first-applicable, per access |
+| **PAP / PRP** — policy authoring and storage | Absent by design. Rules are code; a policy administration surface is a product, not a package |
+
+The rules and stores are therefore *inside* the decision point, as its policies and its attribute
+sources, rather than being the decision point themselves.
+
+Where it is simpler than the reference model, deliberately:
+
+- **Subject attributes are string-valued**, where the reference model types every attribute. They come
+  from claims, which are strings anyway, and they feed the cache key — see below. Resource and
+  environment attributes keep their domain types.
+- **Decisions are three-valued** — `Abstain`, `Allow`, `Deny` — where XACML has a fourth,
+  `Indeterminate`. An exception from a rule *is* that fourth value: it fails closed and propagates,
+  so an unreachable attribute source surfaces as a fault rather than as a denial.
+- **The access string is the action.** `sales:orders:read` already reads
+  `namespace:resource:action`, so nothing is renamed.
+- **Assigned accesses are a role-based input to an attribute-based frame** — a permission assignment
+  treated as a subject attribute, which SP 800-162 describes as a legitimate deployment.
+
+## Replacing the decision point
+
+`IAccessAuthorization` is the seam. It is registered with `TryAdd`, so a host that registers its own
+first wins, and everything above it keeps working:
+
+```csharp
+builder.Services.AddSingleton<IAccessAuthorization, RemotePolicyDecisionPoint>();
+builder.Services.AddAccessAuthorization(builder.Configuration);
+```
+
+The attributes, the handlers and the imperative calls are unchanged. Stores, rules and the resolver
+simply go unused, because they were the local decision point's internals.
+
+Two properties make that seam suit a remote decision point, and both fell out of the capability
+listing rather than being designed for it. The call is **batched** — a set of candidate accesses in,
+the allowed subset out — which is the shape a remote evaluation endpoint wants, since it is
+latency-bound. And it returns a **type** rather than a bare set, so obligations, per-access reasons or
+a cache lifetime can be added later without breaking callers.
+
+## Why caching sits where it does
+
+Only a subject's assigned accesses are cached. A **decision** is never cached, and cannot safely be:
+once rules read resource and environment attributes, a correct cache key would have to cover every
+attribute any rule might consult, which is unknowable from outside the rules.
+
+So the cache key is the subject — the whole composite subject, including its attributes, so the same
+person acting in two organisations does not share an entry.
+
+Only the subject has a `GetKey()`, because only the subject is cached. It is length-prefixed rather
+than delimited so no attribute value can forge a boundary — a collision between two identities would
+let one read the other's grants. Subject attributes are strings for the same reason: canonicalising an
+arbitrary object into a security-relevant key would rest on `ToString()`, which is culture-sensitive
+for numbers and dates and usually just the type name for a custom class.
+
+Resource and environment attributes are therefore `object?`: they come from your domain, are read by
+rules that know their own types, and never reach a cache key.
+
+> **Warning.** `AccessSubject.GetKey()` is a runtime key, not a persistence format. The encoding is
+> free to change; do not store it. `AccessResource.ToString()` is for diagnostics only and is not
+> collision-proof.

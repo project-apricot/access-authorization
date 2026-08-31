@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Zero-dependency access authorization for .NET: an ordered rule pipeline over a composite subject and an optional resource, answering both "is this allowed" and "what is allowed" from one primitive, plus claim-based scope authorization.</Description>
+    <PackageTags>authorization;abac;rbac;permissions;access-control;scopes;security</PackageTags>
+  </PropertyGroup>
+
+</Project>

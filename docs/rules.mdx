@@ -1,0 +1,100 @@
+---
+title: Rules
+description: The ordered pipeline, what each stage is for, and the one thing an assigned access cannot say.
+---
+
+# Rules
+
+Every decision is made by walking an ordered pipeline. The first rule with an opinion about an access
+settles it; when every rule abstains, the answer is no.
+
+| # | Stage | Registered with |
+| --- | --- | --- |
+| 1 | Bypass rules, in registration order | `AddAccessBypassRule<T>()` |
+| 2 | The assigned-access lookup | built in, always present |
+| 3 | Application rules, in registration order | `AddAccessRule<T>()` |
+| — | **Deny** | when everything abstains |
+
+Stage membership does not depend on when you call `AddAccessAuthorization` relative to the rules, so
+the two lines mean the same thing in either order.
+
+## Writing one
+
+Derive from `AccessRule` and answer for a single access. Rules never see whether the caller wanted
+*any* or *all* of a set — that arithmetic happens after each access has been decided on its own,
+which is what lets one code path serve both a gate and a listing.
+
+```csharp
+public sealed class OwnerCanEditRule : AccessRule
+{
+    public override Task<AccessDecision> EvaluateAsync(AccessContext context, string access, CancellationToken ct)
+    {
+        if (access != ContentAccesses.OrdersEdit || context.Resource is null)
+        {
+            return Task.FromResult(AccessDecision.Abstain);
+        }
+
+        var owner = context.Resource.Attributes.GetValueOrDefault("ownerId") as string;
+
+        return Task.FromResult(owner == context.Subject.Id ? AccessDecision.Allow : AccessDecision.Abstain);
+    }
+}
+```
+
+| Decision | Meaning |
+| --- | --- |
+| `Abstain` | No opinion. The next rule decides. Prefer this to `Deny` |
+| `Allow` | Granted, and no later rule is consulted for that access |
+| `Deny` | Refused, and no later rule can grant it |
+
+Return `Abstain` rather than `Deny` unless you mean to veto: a `Deny` from an early rule cannot be
+overridden, which is what makes it useful as a guard and dangerous as a default.
+
+## Attribute types
+
+`AccessContext` carries the three attribute-based dimensions. Subject attributes are `string`-valued
+because they come from claims and feed the cache key; resource and environment attributes are
+`object?` because they come from your domain, so a rule matches rather than parses:
+
+```csharp
+if (context.Resource.Attributes["isPublic"] is true) { … }
+if (context.Resource.Attributes["memberCount"] is int count && count > 5) { … }
+if (context.Environment.Attributes.GetValueOrDefault("ipAddress") is string address) { … }
+```
+
+A value that is present but null is distinguishable from an absent one.
+
+## Bypass rules
+
+A rule registered as a bypass runs before the assigned lookup, so a rule that grants an operator
+everything also **prevents the store from being consulted at all**. That is the position for a
+short-circuit, and the reason for two registration methods rather than one.
+
+## The batched form
+
+`EvaluateManyAsync` answers for many accesses at once. The base class implements it as a loop, so
+overriding it is purely an optimisation — but it must agree with `EvaluateAsync` for every access, or
+a listing and a gate will disagree.
+
+The built-in assigned-access rule overrides it to load the effective set once and intersect, which is
+why listing sixty declared accesses costs one store round trip rather than sixty.
+
+## What an assigned access cannot say
+
+> **Warning.** The assigned-access rule **ignores the resource**. A granted `sales:orders:edit`
+> means the subject may edit orders, not that they may edit order 42.
+
+This is deliberate, and it is the one place a reader could assume otherwise and be wrong in the
+permissive direction. Narrowing a grant to an instance, or widening it based on the instance, is an
+application rule — which receives the whole context, resource attributes included.
+
+The division is also what keeps caching sound: the assigned set is a function of the subject alone,
+so it can be cached, while a rule that reads resource attributes never is. See
+[architecture](architecture).
+
+## When a rule cannot answer
+
+A rule that cannot reach the data it needs should let the exception propagate rather than abstain. An
+outage is not the same answer as "not applicable", and reporting it as one turns a fault into a
+silent denial nobody investigates. The pipeline does not catch it, so the host answers 500 rather
+than 403.

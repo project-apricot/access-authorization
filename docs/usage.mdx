@@ -1,0 +1,152 @@
+---
+title: Usage
+description: Registering the pipeline, gating an endpoint, and listing what a caller may do.
+---
+
+# Usage
+
+## Supplying assigned accesses
+
+The only thing you must provide is a store. Where the accesses come from is never the library's
+business — a table, a role expansion, a directory call, several of these at once.
+
+```csharp
+public sealed class MyAccessStore(AppDbContext database) : IAccessStore
+{
+    public async Task<IReadOnlySet<string>> GetAccessesAsync(AccessSubject subject, CancellationToken ct)
+        => (await database.EffectiveAccesses(subject.Id).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+}
+```
+
+Register several and their results are unioned, so direct grants, group inheritance and role expansion
+can each be a store of its own. With none registered nothing is assigned, which denies rather than
+failing.
+
+```csharp
+builder.Services.AddAccessAuthorization(builder.Configuration);
+builder.Services.AddAccessStore<MyAccessStore>();
+```
+
+Stores are registered **scoped**, because one normally holds a connection or a unit of work.
+
+> **Warning.** Wrapping this in a house-wide extension method is a good idea, but **do not reuse the
+> name `AddAccessAuthorization` for it.** C# resolves extension methods from the innermost enclosing
+> namespace outwards, so your wrapper binds to itself: it compiles without a warning and overflows the
+> stack at run time. Name it for your own system — `AddContosoAuthorization` — or call this one as
+> `AccessAuthorizationServiceCollectionExtensions.AddAccessAuthorization(services, configuration)`.
+
+## Gating an endpoint
+
+```csharp
+[AuthorizeAnyAccess(ContentAccesses.OrdersRead)]                       // at least one
+[AuthorizeAllAccess(ContentAccesses.OrdersRead, ContentAccesses.OrdersEdit)]   // every one
+```
+
+The same two attributes work on controller actions, gRPC methods and — as extension methods — on
+endpoints declared in code:
+
+```csharp
+app.MapGet("/orders/{id}", GetOrder).RequireAccessAny(ContentAccesses.OrdersRead);
+```
+
+> **Warning.** An attribute naming no accesses throws when it is constructed. "All of nothing" is
+> vacuously true, and a gate that admits everyone because its access list went missing is the worst
+> possible failure mode.
+
+## Checking in code
+
+Use the imperative API where there is no endpoint — a worker, a queue consumer — or where the
+decision depends on an object you have to load first.
+
+```csharp
+var context = AccessContext.For(subject, AccessResource.Create("sales:order", order.Id,
+    new Dictionary<string, object?> { ["ownerId"] = order.OwnerId, ["isPublic"] = order.IsPublic }));
+
+await authorization.RequireAnyAsync(context, [ContentAccesses.OrdersEdit], ct);
+```
+
+`RequireAnyAsync` and `RequireAllAsync` throw `AccessAuthorizationException`, which names the
+accesses that were missing. `CheckAnyAsync` and `CheckAllAsync` return a bool instead. An empty
+requirement set is never satisfied, in either mode.
+
+## Asking what the application declares
+
+Separate from any subject: inject `IAccessCatalog` and read it. There is always exactly one catalog
+service and it is always the union of everything registered, so a module declaring its own accesses
+never displaces another's.
+
+```csharp
+catalog.GetDefinitions();                                     // everything, with resource types
+catalog.GetCandidates(AccessResource.OfType("sales:order")); // just what applies to that type
+```
+
+Useful for an administration screen that assigns accesses.
+
+## Listing what a caller may do
+
+Declare the accesses the application knows about, then ask:
+
+```csharp
+builder.Services.AddAccessCatalog(ContentAccesses.All);
+
+var allowed = await httpContext.GetAllowedAccessesAsync(OrderRepository.Describe(id), ct);
+```
+
+Passing a resource answers *what may this subject do to this object* — the candidates come from the
+catalog, narrowed to that resource's type, and the whole rule pipeline runs against the object itself.
+Passing none answers the same question with no object in view.
+
+A candidate set is unavoidable here: a rule is a predicate, and a predicate cannot be inverted to
+enumerate what satisfies it. Declaring accesses with a resource type keeps a listing for one order
+from probing unrelated accesses:
+
+```csharp
+new AccessDefinition("sales:orders:read", "sales:order")
+```
+
+> **Warning.** Asking for a listing with no catalog registered throws rather than returning an empty
+> set. Empty would hide every operation in the interface and look like a permissions problem, when it
+> is a missing registration.
+
+## Typed application identity
+
+`AccessSubject` is sealed: it computes its cache key from its id and attributes alone, so a subclass
+adding fields would leave them out of that key and two identities differing only in those fields would
+share one cache entry. Project instead of deriving — the canonical subject still identifies and keys,
+while a small view carries the typed reading and validates once:
+
+```csharp
+public sealed class OrganizationSubject
+{
+    public AccessSubject Subject { get; }
+    public string UserId => this.Subject.Id;
+    public string OrganizationId { get; }        // never null
+
+    public static bool TryFrom(AccessSubject subject, out OrganizationSubject? projected) { … }
+}
+```
+
+A rule or store then reads `organization.OrganizationId` rather than repeating a keyed lookup and a
+null check. Populate the attribute in the first place by configuring `Subject:AttributeClaims`, or by
+overriding `ClaimsAccessSubjectResolver.Resolve` when it needs to come from somewhere other than a
+claim.
+
+> **Note.** Anything a rule needs that is *not* part of the identity does not belong on the subject at
+> all. Put it on `AccessResource.Attributes`, or inject it — a rule is a class with dependency
+> injection, so it can reach a repository or the current request directly.
+
+## Settings
+
+One section, `Authorization`, covers everything.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `CacheLifetime` | unset | How long a subject's assigned accesses may be reused. Unset or non-positive disables caching |
+| `Subject:IdClaimTypes` | `sub`, `nameidentifier` | Where the subject id is read from, in order |
+| `Subject:AttributeClaims` | empty | Claims lifted onto the subject as attributes, as `claimType: attributeName` |
+| `Scope:ClaimTypes` | `scope`, `scp` | Claim types token scopes are read from |
+| `Scope:Separators` | `" "` | Characters separating scopes within one claim value |
+
+Caching is off by default: a cached grant outlives a revocation by up to its lifetime, which should
+be a decision rather than something inherited. Only the assigned set is ever cached — never a
+decision, for the reason given in [architecture](architecture).

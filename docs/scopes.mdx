@@ -1,0 +1,70 @@
+---
+title: Scopes
+description: Token-scope authorization, independent of the access model.
+---
+
+# Scopes
+
+Scope authorization answers a different question from access authorization: not *what may this
+subject do* but *what was this client's token issued to ask for*. It is usually how
+service-to-service calls are authorized, and it works on a token with no subject at all.
+
+It ships in the core package under its own namespace, and arrives with the single registration call —
+there is nothing extra to add:
+
+```csharp
+builder.Services.AddAccessAuthorization(builder.Configuration);
+```
+
+Nothing runs until something asks a scope question, so a service that never uses scopes pays only one
+no-op authorization handler per request. It is registered unconditionally because the alternative was
+worse: a scope attribute with no handler behind it contributes a requirement nothing can satisfy, and
+every such request is refused with no explanation anywhere.
+
+> **Warning.** Scopes and accesses are deliberately not one set. Merging them would let a token scope
+> satisfy an access requirement, which widens authority rather than simplifying anything.
+
+## Declaratively
+
+```csharp
+[AuthorizeAnyScopes("sales.read", "content.admin")]
+[AuthorizeAllScopes("sales.read")]
+
+app.MapGet("/report", GetReport).RequireScopesAll("sales.read");
+```
+
+Same mechanism as the access attributes, so these work on gRPC methods too — which is what replaces
+calling a scope check by hand at the top of every service method.
+
+## In code
+
+`IScopeAuthorization` is synchronous, because reading claims is not I/O:
+
+```csharp
+scopeAuthorization.RequireAll(principal, ["sales.read"]);
+
+if (scopeAuthorization.CheckAny(principal, ["sales.read", "content.admin"]))
+{
+    …
+}
+```
+
+It takes a `ClaimsPrincipal` rather than an `HttpContext`, so a gRPC service passes
+`context.GetHttpContext().User` and a worker passes whatever principal it has.
+
+`RequireAll` and `RequireAny` throw `ScopeAuthorizationException`, naming the scopes that were
+required. An empty requirement set is never satisfied.
+
+## Settings
+
+Bound from the `Scope` subsection of the `Authorization` section.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `Scope:ClaimTypes` | `scope`, `scp` | Claim types scopes are read from; every match contributes |
+| `Scope:Separators` | `" "` | Characters separating scopes within one claim value |
+
+Both spellings are read by default because issuers disagree: RFC 9068 and IdentityServer emit
+`scope`, Microsoft Entra emits `scp`. Repeated claims of either type are combined.
+
+Comparison is ordinal, so `Content.Read` does not satisfy a requirement for `sales.read`.

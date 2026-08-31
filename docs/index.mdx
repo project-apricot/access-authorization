@@ -1,0 +1,59 @@
+---
+title: Access Authorization
+description: Deny by default, decided by an ordered pipeline of rules, with assigned accesses as one of them.
+---
+
+# Access Authorization
+
+Authorization where nothing is permitted until a rule says so. Statically assigned accesses — from a
+role, a group, a direct grant — are one rule in that pipeline rather than the whole mechanism, so a
+decision that depends on the object being acted on, or on the caller's organisation, needs no
+workaround.
+
+## Packages
+
+| Package | What it is |
+| --- | --- |
+| `ApricotFramework.AccessAuthorization` | The zero-dependency core: identities, the rule pipeline, the catalog, scope authorization |
+| `ApricotFramework.AccessAuthorization.AspNetCore` | Registration, attributes, endpoint extensions, claims-to-subject resolution, caching |
+| `ApricotFramework.AccessAuthorization.ErrorDefinitions` | Optional: renders authorization failures as problem details |
+
+Outside an ASP.NET Core host the core package works on its own — the pipeline needs no container.
+
+## Install
+
+```bash
+dotnet add package ApricotFramework.AccessAuthorization
+dotnet add package ApricotFramework.AccessAuthorization.AspNetCore
+```
+
+## The one primitive
+
+Asking *may this caller read order 42* and asking *what may this caller do to order 42* are the same
+question over different candidate sets. The library exposes exactly one method, and everything else
+is built on it:
+
+```csharp
+Task<AccessEvaluation> GetAllowedAsync(AccessContext context, IReadOnlySet<string> candidates, CancellationToken ct);
+```
+
+A gate is that call narrowed to the accesses an endpoint asked about. A capability listing is that
+call over everything the application declares. Because both run the same pipeline, an access a
+listing reports is an access the gate will accept — the interface cannot offer a button that returns
+403, or hide one that would have worked.
+
+> **Note.** That property is why the surface looks unusual for an authorization library. Two methods
+> would have been more conventional and would eventually have disagreed.
+
+## The model
+
+| Concept | What it is |
+| --- | --- |
+| **Access** | An opaque string an endpoint requires, conventionally `namespace:resource:action` |
+| **Subject** | Who is asking: an id plus attributes, so "a user in an organisation" is one identity |
+| **Resource** | What is being acted on: a type, an optional instance id, and attributes |
+| **Rule** | Answers `Allow`, `Deny` or `Abstain` for one access in one context |
+| **Store** | Supplies the accesses statically assigned to a subject |
+| **Catalog** | The accesses the application declares, which is what makes a listing answerable |
+
+Read [usage](usage) next for the ordinary path, or [rules](rules) for the pipeline itself.

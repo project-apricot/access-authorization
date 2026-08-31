@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Error definition mapping for ApricotFramework.AccessAuthorization: renders authorization failures as RFC 9457 problem details through ApricotFramework.ErrorDefinitions.</Description>
+    <PackageTags>authorization;permissions;access-control;errors;problemdetails;aspnetcore</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ApricotFramework.ErrorDefinitions.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ApricotFramework.AccessAuthorization/ApricotFramework.AccessAuthorization.csproj" />
+    <ProjectReference Include="../ApricotFramework.AccessAuthorization.AspNetCore/ApricotFramework.AccessAuthorization.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>
