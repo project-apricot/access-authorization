@@ -1,0 +1,5 @@
+{
+  "title": "Access Authorization",
+  "description": "Rule-based access authorization for .NET, with ASP.NET Core, gRPC and scope support.",
+  "pages": ["index", "usage", "rules", "architecture", "aspnetcore", "scopes", "error-definitions"]
+}

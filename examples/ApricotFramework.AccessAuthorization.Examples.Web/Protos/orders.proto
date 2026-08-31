@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+option csharp_namespace = "ApricotFramework.AccessAuthorization.Examples.Web.Grpc";
+
+package orders;
+
+// Exists to prove one authorization mechanism covers gRPC as well as MVC and minimal APIs.
+service Orders {
+  rpc GetOrder (GetOrderRequest) returns (GetOrderReply);
+  rpc DeleteOrder (DeleteOrderRequest) returns (DeleteOrderReply);
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message GetOrderReply {
+  string id = 1;
+  string title = 2;
+}
+
+message DeleteOrderRequest {
+  string id = 1;
+}
+
+message DeleteOrderReply {
+  bool deleted = 1;
+}

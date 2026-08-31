@@ -1,0 +1,86 @@
+---
+title: Error definitions
+description: Rendering authorization failures as RFC 9457 problem details.
+---
+
+# Error definitions
+
+`ApricotFramework.AccessAuthorization.ErrorDefinitions` maps the authorization exceptions onto
+`ApricotFramework.ErrorDefinitions` errors, so a failure leaves the service as problem details rather
+than as an unhandled exception.
+
+```csharp
+builder.Services.AddAccessAuthorizationErrorDefinitions();
+
+app.UseExceptionHandler();
+```
+
+It registers two things: an `IExceptionErrorMapper` — not an exception handler of its own, so one
+handler answers for every library — and a decorator over `IAuthorizationMiddlewareResultHandler`,
+because a denial from an attribute raises no exception and would otherwise be a bodyless 403.
+
+| Exception | Kind | Code |
+| --- | --- | --- |
+| `AccessAuthorizationException` | `access_denied` | `ACCESS_NOT_GRANTED` |
+| `ScopeAuthorizationException` | `access_denied` | `SCOPE_NOT_GRANTED` |
+
+Which path produced the failure decides what the payload can say:
+
+| Denial | Payload | Why |
+| --- | --- | --- |
+| `RequireAnyAsync` / `RequireAll` throwing | `missing` | The check knows exactly which of the set went unmet |
+| An attribute or endpoint convention | `required`, `match` | A policy failure records the requirement, not which part of it failed |
+
+An imperative denial:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Access denied",
+  "status": 403,
+  "instance": "/api/orders/43",
+  "errors": [
+    {
+      "kind": "access_denied",
+      "code": "ACCESS_NOT_GRANTED",
+      "message": "None of the required accesses is granted: sales:orders:edit.",
+      "payload": { "missing": ["sales:orders:edit"] }
+    }
+  ]
+}
+```
+
+And an attribute denial:
+
+```json
+{
+  "kind": "access_denied",
+  "code": "SCOPE_NOT_GRANTED",
+  "message": "The required scope is not granted.",
+  "payload": { "required": ["sales.read"], "match": "all" }
+}
+```
+
+## What it leaves alone
+
+The result-handler decorator speaks only for this library's own requirements, and only for a 403:
+
+- A **401** is left untouched. The caller never said who it was, which is not this library's failure
+  to describe even when one of its requirements is also unmet.
+- A failure caused by some other requirement gets no body from here.
+- If anything has already written a body — a `Content-Type` is set, or the response has started — it
+  stands down.
+
+That last guard is what lets it compose with another decorator rather than fight it. If
+`ApricotFramework.Authentication.ErrorDefinitions` is also registered, both wrap the handler, the
+inner one writes, and the outer one sees the body and returns.
+
+Registration order does not affect **whether** you get exactly one well-formed body — it never writes
+twice, and where `AddAuthorization` sits makes no difference at all, since the framework registers its
+handler with `TryAdd`. Order does decide **which description** you get when two decorators are in play:
+the last one registered is the outermost, so the *earlier* registration writes and wins. Register this
+package after the authentication one to get the more specific message.
+
+> **Note.** The payload names the accesses or scopes the endpoint required. If you would rather not
+> tell an unauthorized caller what it lacks, do not register this package and let the middleware answer
+> a bodyless 403.

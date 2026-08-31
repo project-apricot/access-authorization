@@ -1,0 +1,92 @@
+---
+title: ASP.NET Core
+description: Registration, attributes across all three transports, subject resolution and caching.
+---
+
+# ASP.NET Core
+
+`ApricotFramework.AccessAuthorization.AspNetCore` supplies registration, the attributes, and the
+bridge from a `ClaimsPrincipal` to a subject.
+
+```csharp
+builder.Services.AddAuthorization();
+builder.Services.AddAccessAuthorization(builder.Configuration);
+builder.Services.AddAccessStore<MyAccessStore>();
+```
+
+`AddAccessAuthorization` has the usual overloads: `IConfiguration`, `IConfiguration` plus a section
+name, an `Action<AccessAuthorizationOptions>`, or none for defaults.
+
+## One mechanism, three transports
+
+The attributes implement `IAuthorizationRequirementData` and derive from `AuthorizeAttribute`, so the
+requirement travels as **endpoint metadata** and the authorization middleware composes it. Nothing is
+an MVC filter, which is why the same attribute governs all three:
+
+```csharp
+[AuthorizeAnyAccess(ContentAccesses.OrdersRead)]                 // controller action
+public object Get(string id) => …
+
+[AuthorizeAllScopes("sales.read")]                             // gRPC method
+public override Task<GetOrderReply> GetOrder(GetOrderRequest request, ServerCallContext context) => …
+
+app.MapGet("/orders/{id}", GetOrder).RequireAccessAny(ContentAccesses.OrdersRead);   // minimal API
+```
+
+`[AllowAnonymous]` is honoured by the middleware, so this library carries no equivalent check of its
+own.
+
+> **Note.** Attributes are **resource-free**. They ask whether the subject holds the access at all, and
+> the handler never inspects the route or loads anything, so `context.Resource` is always null for a
+> rule reached this way. Gating on a particular object is an imperative check in the handler, where the
+> object has been loaded — see [usage](usage#checking-in-code).
+
+| Outcome | Response |
+| --- | --- |
+| No credentials at all | 401, so a client knows to authenticate |
+| Authenticated, access not granted | 403 |
+| Authenticated with no subject id, access required | 403 |
+
+> **Note.** A gRPC client sees 401 as `Unauthenticated` and 403 as `PermissionDenied`, but the
+> failure is produced before the gRPC endpoint runs, so the response carries no gRPC trailers and the
+> client appends its own "missing HTTP content-type" note to the message. The status code is correct;
+> the extra text is standard behaviour for authorization failures on a gRPC endpoint, not specific to
+> this library.
+
+## Resolving the subject
+
+`IAccessSubjectResolver` turns the principal into an `AccessSubject`. The default reads `sub`, falling
+back to `ClaimTypes.NameIdentifier` — both are needed, because JWT bearer authentication rewrites
+`sub` to the latter unless inbound claim mapping is switched off.
+
+Configured claims are lifted onto the subject as attributes, which is how an identity becomes
+composite without the library knowing what the qualifier means:
+
+```json
+{
+  "Authorization": {
+    "Subject": { "AttributeClaims": { "org_id": "organization" } }
+  }
+}
+```
+
+A rule, or a store, then reads `subject.Attributes["organization"]`. Two subjects with the same id in
+different organisations are different subjects, including for caching.
+
+A principal carrying no subject id resolves to nothing and every access is denied. That is the normal
+state of a machine token, which [scopes](scopes) covers instead.
+
+## Caching
+
+Set `CacheLifetime` and a subject's assigned accesses are reused for that long, keyed by the whole
+subject. Nothing is cached by default. The entries are namespaced, so they cannot collide with
+anything else sharing the host's memory cache.
+
+## Reading capabilities from a request
+
+```csharp
+var allowed = await httpContext.GetAllowedAccessesAsync(resource, cancellationToken);
+var subject = httpContext.GetAccessSubject();
+```
+
+The first requires a catalog and throws without one; see [usage](usage).
