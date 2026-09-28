@@ -10,7 +10,7 @@
 
   <!-- Example app only. Never referenced by a packable project; check the packed .nuspec. -->
   <ItemGroup>
-    <PackageVersion Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.84.0" />
     <PackageVersion Include="Grpc.Net.Client" Version="2.83.0" />
   </ItemGroup>
 
