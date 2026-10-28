@@ -11,12 +11,15 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      test-stack:
+      grpc-stack:
         patterns:
-          - "xunit*"
-          - "Microsoft.NET.Test.Sdk"
-          - "coverlet.*"
-          - "Microsoft.Testing.*"
+          - "Grpc.*"
+          - "Google.Protobuf"
+    ignore:
+      - dependency-name: "xunit*"
+      - dependency-name: "Microsoft.NET.Test.Sdk"
+      - dependency-name: "coverlet.*"
+      - dependency-name: "Microsoft.Testing.*"
 
   - package-ecosystem: github-actions
     directory: "/"
